@@ -19,7 +19,6 @@ mutate_batch<- function(df,nm, value=NA){
 cleaning_log<-cleaning_log %>%
   filter(name!="enumerator")
 
-
 # These are all new choices that we want to add as options in the data set
 new_vars<-tibble::tribble(
   ~name,              ~choice, 
@@ -92,7 +91,6 @@ kbo<- kobold::kobold(survey = ks %>%
                      data = df_modified,
                      cleaning = cleaning_log)
 kbo_cleaned<- kobold::kobold_cleaner(kbo)
-
 
 #write out clean data set
 write_csv(kbo_cleaned$data,file = paste0("outputs/", butteR::date_file_prefix(), "_clean_data.csv"))
