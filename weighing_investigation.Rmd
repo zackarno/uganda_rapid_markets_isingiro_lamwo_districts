@@ -1,0 +1,444 @@
+---
+title: "weighting_rapid_markets"
+author: "Zack Arno"
+date: "3/9/2021"
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, message= F)
+
+library(tidyverse)
+library(srvyr)
+
+
+df<- read_csv("outputs/20210310_clean_data.csv")
+host_pop<- read_csv("inputs/20210224_host_pop_cleaned.csv")
+ref_pop<- read_csv("inputs/ref_pops.csv")
+
+dt_set_options<- function(x){
+    DT::datatable(x,
+    options = list(
+      autoWidth=F,
+      dom= 't',
+     list(list(width = '20%', targets = list(1,2,3)))
+     )
+    )}
+
+```
+
+## Sampling Methodology 
+Sampling for the february/march 2021 rapid market assessmet in Isingiro & Lamwo was done using stratified SRS for the refugee population and a variation of cluster sampling for the host community. As the cluster sampling method that was followed presents several limitations, I am attempting to use this markdown report to find the best method to weight the data and create the design objects for analysis under the current circumstances.
+
+The **host community** "cluster" sampling method was as follows: the lowest admin level of population data available was sub-county. However, this was not used as the cluster. A cluster size of 6 was selected and the number of clusters drawn for each sub-county was based on the population of that sub-county with a target of 95-7 confidence/margion of error at the district level. The design effect to calculate total sample needed was taken from the 2017 UBOs National Household Assessment. The clusters themselves were randomly generate gps points. When enumerators arrived at the cluster pt location they were told to sample the 6 closest household
+
+### Limitations
+Some of the limitations to the cluster sampling: 
+
+* no population data for the clusters (host community)
+* a bias towards rural populations
+* Since we have no population
+
+### Steps to deal with/ minimize limitations
+
+1. split the datasets by population (refugee, host)
+2. weight refugee data  at district level and analyze as stratified SRS at the district level and then overall refugee level
+3. weight host data at sub-county level and  analyze as clusters sample at the district and then overall host level (details below)
+4. combine the two data sets as a cluster sample, weight at district level and aggregate both populations together at the district and overall level.
+
+By creating several sets of weights and design objects I avoid having the limitations imposed by the host community sampling methodology impact the analysis of the refugee data (step 2). However, the limitations will still effect the analysis (step 4) when I analyze the refugee and host data together.
+
+
+## 1.)  Refugee only weight & survey design construction
+
+The weighting and methodology for the refugee only analysis (district & refugee overall)  can be seen clearly from the code and table below.
+
+```{r refugee weight table}
+# step 1 - calculate weights and make design ------------------------------
+
+# need to make sure if these are hhs or individuals
+
+# df %>% tabyl(status_loc)
+# just some recoding
+df<-df %>% 
+  mutate(
+    strata= case_when(
+      status_loc %in% c("nakivale_refugee","oruchinga_refugee")~"isingiro_refugee",
+      status_loc == "palabek_refugee"~ "lamwo_refugee",
+      TRUE ~ status_loc
+    )
+  )
+
+#filter to only refugee data
+df_ref<- df %>% 
+  filter(str_detect(strata, "_refugee$"))
+
+# only hos
+df_host<- df %>% 
+  filter(str_detect(strata, "_host$"))
+
+# some recoding of the refugee population 
+ref_pop<- ref_pop %>% 
+  mutate(strata= ifelse(strata=="Isingiro_ref",
+                        "isingiro_refugee",
+                        "lamwo_refugee"),
+         pop_status= "refugee") %>% 
+  rename(total_hh="total_pop")
+
+# create weight table that can be merged with data to create a design object
+refugee_weight_table<-df_ref %>% 
+  group_by(strata) %>% 
+  summarise(
+    sample_strata=  n()
+  )%>% 
+  mutate(
+    sample_global= sum(sample_strata)) %>% 
+  left_join(ref_pop %>% 
+              rename(pop_strata= "total_hh")) %>% 
+  mutate(pop_global=sum(pop_strata) ,
+  weights = (pop_strata/pop_global)/(sample_strata/sample_global)
+  )
+
+# refugee_weight_table
+refugee_weight_table %>% dt_set_options()
+
+```
+
+
+### Refugee survey design object 
+
+This survey design object can be used to analyze the refugee data per district and to aggregate the refugee data together
+
+```{r, refugee design object}
+
+df_ref<-df_ref %>% 
+  left_join(refugee_weight_table, by= "strata")
+
+refsvy<-survey::svydesign(ids = ~ 1,
+                              strata =  ~strata,
+                              weights= ~weights,
+                              data = df_ref)
+
+refsvy<- as_survey(refsvy)
+# as_survey()
+```
+
+
+## 2.) Host community only weight & survey design construction
+
+```{r, echo = F}
+mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+df_host<- df_host %>% 
+  group_by(unique_pt_id) %>% 
+  mutate(sub_county_name= mode(sub_county_name)) %>% 
+  ungroup()
+
+```
+
+A table created below shows the host community population data at the sub-county level
+```{r}
+
+host_strata_level<- c("sub_county_name", "district_name")[1]
+
+  df_host<- df_host %>% 
+    mutate(
+      district_sub_county= paste0(district_name, "_",sub_county_name)
+    )
+  
+  # some annoying recoding to make match data set
+  
+  host_pop_harmonized<- host_pop %>% 
+    mutate(district_name= tolower(district),
+           district_sub_county= glue::glue("{district}_{sub_county}"),
+           district_sub_county = ifelse(district_sub_county=="isingiro_town_council",
+                          "isingiro_isingiro_tc",district_sub_county),
+           sub_county_name= ifelse(sub_county=="isingiro_town_council",
+                              "isingiro_tc",sub_county)
+           
+    ) %>% 
+    select(district_name,sub_county_name, district_sub_county, total_hh=hh)
+ 
+  host_pop_harmonized %>% 
+  dt_set_options()
+
+```
+
+
+
+
+
+
+
+```{r,big problem , eval=F, echo=F}
+
+df_host %>%
+  group_by(unique_pt_id) %>%
+  mutate(num_sub_counties =length(unique(sub_county_name)),
+            ) %>%
+  filter(num_sub_counties!=1) %>%
+  mutate(name= "sub_county_name",
+         type= "change_response"
+         current_value= sub_county_name,
+         value= mode(sub_county_name),
+         issue_id = "wrong_sub_county",
+         adjust_log="",
+         Reviewed="") %>%
+  select(uuid, name, current_value, value, issue_id, adjust_log, Reviewed) %>%
+  arrange(unique_pt_id)# %>%
+  #write_csv("inputs/auto_cl/20210310_wrong_subcounties_autocl.csv")
+
+
+
+
+```
+
+Since we do not have cluster population data we will have to make assumption that each cluster has the same population size
+
+```{r, eval=F, echo=F}
+df_host %>% 
+  group_by(unique_pt_id) %>% 
+  mutate(
+    n=n()
+  ) %>% 
+  filter(n!=6) %>% 
+   mutate(name= "unique_pt_id",
+         type= "change_response",
+         current_value= unique_pt_id,
+         value= "",
+         issue_id = "cluster_size_not_6",
+         adjust_log="",
+         Reviewed="",
+         clust_size= n) %>%
+  select(uuid, name, current_value, value, issue_id, adjust_log, Reviewed, clust_size) %>%
+  arrange(unique_pt_id) %>% 
+  write_csv("inputs/auto_cl/20210310_cluster_not_6.csv")
+
+# still a problem
+df_host %>% 
+  mutate(
+    cluster_id= paste0(strata, "_", parse_number(unique_pt_id))
+    ) %>% 
+  group_by(cluster_id) %>% 
+  summarise(
+    sample_strata= n()
+  ) %>% 
+  filter(sample_strata!=6)
+
+# doest this mean that each cluster is not the same sub_county?
+
+```
+
+Below is a table that shows the # of clusters and interviews per sub-county. The number of interviews should be a multiple of 6, lets assume this is a data cleaning issue and will be fixed.
+
+To weight the clusters we need assume: 
+
+-  Each cluster in the the same sub-county has equal populations and thus equal weights
+
+
+
+```{r}
+cluster_breakdown_table<-df_host %>% 
+  mutate(
+    cluster_id= paste0(strata, "_", parse_number(unique_pt_id))
+    ) %>% 
+  group_by(sub_county_name) %>% 
+  summarise(number_clusters= length(unique(cluster_id)),
+            number_interviews = n()
+  )
+
+cluster_breakdown_table %>%  dt_set_options()
+
+
+```
+
+
+### questions: 
+I assume equal population per cluster in each sub-county... but:
+
+1. what should that population that is divided amongst the clusters be? Should it be the full population of the sub-county? This seems wrong, but it might not matter since the pop is not varying between clusters (in the same sub-county) 
+2. Im a bit confused if I should weight at the sub-county or district level. I dont think it should actually make any difference because the data/weights will be aggregated to the district level anyways.
+
+Below you can see the calculations and weighting table taking this approach
+
+```{r}
+
+cluster_pops<- cluster_breakdown_table %>% 
+  left_join(host_pop_harmonized,
+            by ="sub_county_name") %>% 
+  mutate(
+    cluster_pop = total_hh/number_clusters,
+    !!host_strata_level := tolower(!!sym(host_strata_level))
+  ) %>% 
+  # select(-district) %>% 
+  group_by(!!sym(host_strata_level)) %>% 
+  summarise(cluster_pop = sum(cluster_pop),
+            number_clusters=unique(number_clusters))
+df_host %>% 
+  group_by(!!sym(host_strata_level)) %>% 
+  summarise(
+    sample_strata= n()
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    sample_global= sum(sample_strata)
+  )
+cluster_pops %>% 
+  mutate(
+    pop_strata=cluster_pop*number_clusters,
+    p
+  )
+
+host_weight_table<-df_host %>% 
+  left_join(cluster_pops, by = host_strata_level) %>% 
+  group_by(!!sym(host_strata_level)) %>% 
+    summarise(
+    sample_strata=  n(),
+    pop_strata= sum(cluster_pop)
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    pop_global= sum(pop_strata),
+    sample_global = sum(sample_strata),
+    weights = (pop_strata/pop_global)/(sample_strata/sample_global)
+  )
+
+df_host_with_weights<-df_host %>% 
+  mutate(
+    cluster_id= paste0(strata, "_", parse_number(unique_pt_id))
+  ) %>% 
+  left_join(
+    host_weight_table, by =host_strata_level
+  )
+
+
+host_weight_table %>% dt_set_options()
+```
+
+Below is a table showing the data with a few relevant columns including weights. This is shown to verify that weight table was joined by sub county, but still has distinct cluster ids ( that have same weight per sub county). 
+
+```{r}
+df_host_with_weights %>% 
+  select(cluster_id, host_strata_level, weights) %>% 
+  head(50) %>% 
+  dt_set_options()
+```
+
+### Host survey design object
+The code below shows the creation of the host community only survey design object. This can be used for the district and overall level analysis of just host community data.
+
+```{r host svy design object}
+
+# problem if there is only one cluster in  strata... .thats the problem 
+# if we make the sub-county the strata this happens... if we make the the strata the district
+# then this will not be an issue.....
+
+problem_cluster_id<- df_host_with_weights %>% 
+  group_by(cluster_id) %>% 
+  summarise(n=n()) %>% 
+  filter(n<3) %>% pull(cluster_id)
+dfhost2<- df_host_with_weights %>%
+  filter(cluster_id!=problem_cluster_id & !str_detect(!!sym(host_strata_level),"kakamba"))
+
+
+hostsvy <- survey::svydesign(data = df_host_with_weights,
+                             ids = ~cluster_id, 
+                             strata = formula(paste0("~","district_name")),
+                             weights = ~weights
+                             # nest = T
+                               )
+hostsvy<- as_survey(hostsvy)
+```
+
+Here I am just doing pct mean calculation to test whether the weighting at sub-county or district makes a difference. For this output we are using **`r host_strata_level`** weights.
+```{r}
+hostsvy %>% 
+  group_by(crop_growing) %>% 
+  summarise(
+    pct= survey_mean( vartype="ci")
+    ) %>% dt_set_options()
+```
+
+## 3.) Host Community  & Refugee combined weight & survey design construction
+
+For aggreating host commmunity and refugee together at the district and overall levels I need to define one survey design
+
+```{r,eval=F}
+
+weight_tables<- list(refugee_weight_table, host_weight_table %>% 
+                       rename(strata=host_strata_level))
+weight_tables
+
+weight_table<-map_dfr(weight_tables, function(x)x %>% 
+          select(join_col=strata, sample_strata, pop_strata))
+
+weight_table<-  weight_table %>% 
+  mutate(
+    pop_global= sum(pop_strata),
+    sample_global = sum(sample_strata),
+    weights = (pop_strata/pop_global)/(sample_strata/sample_global)
+  )
+
+#need to make join col dynamic.
+# add cluster id and column to join on
+df<- df %>% 
+  mutate(
+     cluster_id= case_when(
+       status=="host_community"~
+       paste0(strata, "_", parse_number(unique_pt_id)),
+       TRUE ~strata),
+    join_col= case_when(
+      status=="host_community"~sub_county_name,
+      TRUE~ strata
+                          )
+  )
+
+df<- df %>% 
+  left_join(
+    weight_table, by =c("join_col")
+  )
+
+
+host_ref_svy <- survey::svydesign(data = df,
+                             ids = ~cluster_id, 
+                             strata = ~ district_name, # will only present results at district and above 
+                             weights = ~weights,
+                             nest = T
+                             )
+host_ref_sy<- as_survey(hostsvy)
+```
+
+```{r,eval=F, echo= F}
+weights = (55/pop_global)/(55/sample_global)
+
+sg/popg
+55/pg * sg/55
+```
+
+
+```{r,eval=F, echo=F}
+host_pop$strat[host_pop$strat %in% df_host$sub_county_name]
+refugee_weight_table<-df_host %>% 
+  group_by(strata) %>% 
+  summarise(
+    sample_strata=  n()
+  )%>% 
+  mutate(
+    sample_global= sum(sample_strata)) %>% 
+  left_join(ref_pop %>% 
+              rename(pop_strata= "total_hh")) %>% 
+  mutate(pop_global=sum(pop_strata) ,
+  weights = (pop_strata/pop_global)/(sample_strata/sample_global)
+  )
+
+
+```
+
+
+

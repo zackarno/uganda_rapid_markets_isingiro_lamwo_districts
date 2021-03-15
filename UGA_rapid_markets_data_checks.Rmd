@@ -1,0 +1,596 @@
+---
+title: "UGA Rapid Markets 2021 - Data Checks"
+author: "Zack Arno"
+date: "2/22/2021"
+output: 
+  html_document:
+    code_folding: hide
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = F,message = F)
+library(tidyverse)
+library(sf)
+library(lubridate)
+library(leaflet)
+library(glue)
+library(butteR)
+library(janitor)
+source("R/check_others.R")
+source("R/extras/potatoes.R")
+source("R/check_distance_from_target_by_id.R")
+library(koboAPI)
+
+cleaned<- T
+write_output<- F
+dfp<-date_file_prefix(-1)
+# edited_log
+# el<- readxl::read_xlsx("inputs/cl/20210301_auto_cl_harmonized_DvZ_all.xlsx",sheet = "20210301_auto_cl_harmonized")
+el<- read_csv("inputs/cl/20210302_auto_cl_DvZ_done (1).csv")
+# 
+
+dt_set_options<- function(x){
+    DT::datatable(x,
+    options = list(
+      autoWidth=F,
+      dom= 't',
+     list(list(width = '20%', targets = list(1,2,3)))
+     )
+    )
+  
+}
+
+# raw_xl_to_csv<-function(){
+#   new_fp<- glue("inputs/raw_data/{dfp}_rapid_markets_data.csv")
+#   if(!exists(new_fp)){
+#   fp<-list.files("inputs/raw_data",pattern = ".xlsx$",full.names = T) 
+#   df_xl<-readxl::read_xlsx(fp[length(fp)])
+#   write_csv(df_xl,new_fp)
+#   }
+#   
+# }
+# raw_xl_to_csv()  
+
+# download kobo data set - first i need form id
+raw_data_path<-paste0("inputs/raw_data/",dfp, "_rapid_markets_data.csv")
+if(write_output){
+  form_id<-"724860"
+  dat<- download_data(formid = form_id,user = kobo_user_name,pwd = kobo_password)
+ 
+  write_csv(dat,file = raw_data_path)
+}
+if(cleaned){
+  df<- read_csv("outputs/20210309_clean_data2.csv") %>% 
+    rename(lon="_geopoint_longitude",
+           lat= "_geopoint_latitude"
+           )
+}else{
+  df<- read_csv(raw_data_path,col_types = cols(start="c"))
+}
+
+
+df<-df %>% 
+  filter(consent=="yes", as_date(start)>"2021-02-14") 
+
+if(!cleaned){
+  df<- df %>% 
+    mutate(
+      status_loc=ifelse(status=="refugee_settlement", paste0(refugee_settle_name,"_refugee"),
+                        paste0(district_name,"_host")) %>% snakecase::to_snake_case(),
+      unique_pt_id= paste0(status_loc,"_",point_number),
+      start_date= as_date(start)
+      
+    ) %>% 
+    rename(lon="_geopoint_longitude",
+           lat= "_geopoint_latitude",
+           uuid= "_uuid")}
+
+
+fm<-list()
+fm$full<-list.files("inputs/spatial_samples",pattern = ".kml*", full.names = T)
+fm$short<-list.files("inputs/spatial_samples",pattern = ".kml*", full.names = F)
+# ih<-st_read(fm$full[2])
+
+ss<-map2_dfr(.x = fm$full, .y = fm$short, ~st_read(.x) %>% 
+       select(Name) %>% 
+       st_zm() %>% 
+       mutate(
+         status_loc=str_replace_all(.y,"_extra|2|\\.kml",""),
+         status_loc=str_replace_all(status_loc,"oruching","oruchinga"),
+              unique_pt_id=paste0(status_loc,"_",Name)
+              )
+)
+
+
+
+df_host<- df %>%
+  filter(str_detect(status_loc,"_host$")) 
+df_ref<- df %>% 
+  filter(str_detect(status_loc,"_refugee$"))
+
+report_params<-c("uuid", 
+                 "start_date",
+                 "enumerator",
+                 "district_name",
+                 "status",
+                 "status_loc",
+                 "point_number",
+                 "unique_pt_id")
+outputs<-list()
+
+ks<- readxl::read_xlsx(path = "inputs/tool/rapid_markets_tool.xlsx",sheet = "survey")
+kc<- readxl::read_xlsx(path = "inputs/tool/rapid_markets_tool.xlsx",sheet = "choices")
+
+# kb<- kobold::kobold(survey = ks, choices = kc, data = df)
+
+cl_params<- c("uuid","start_date","enumerator","district_name", "refugee_settle_name","unique_pt_id", "type","name","current_value","value" ,"issue","issue_id")
+cl_outputs<- list()
+
+```
+
+As of  `r Sys.time()` there are **`r nrow(df)`** total interviews completed (host: `r nrow(df_host)`, refugee: `r nrow(df_ref)`)
+
+## Progress
+Total Interviews By Strata
+```{r}
+df %>% 
+  count(status, district_name) %>% 
+  dt_set_options
+
+```
+
+
+## Check Number of Interview per cluster (Host)
+
+```{r cars}
+observed_cluster_size<-df %>% 
+  filter(str_detect(status_loc,"_host$")) %>% 
+  count(unique_pt_id)# %>% 
+
+cluster_lt_6<- observed_cluster_size %>% 
+    filter(n<6)
+
+
+  
+df_host_enums_by_clust<- df_host %>% 
+  group_by(unique_pt_id) %>% 
+  summarise(enums_html= paste0(enumerator,collapse = "</br>"),
+            enums= paste0(enumerator,collapse = ","))
+
+ss_ref<- ss %>% 
+  filter(str_detect(status_loc, "_refugee$"))
+
+
+ss_host<- ss %>% 
+  filter(str_detect(status_loc, "_host$")) %>% 
+  left_join(observed_cluster_size, by= "unique_pt_id") %>%
+  mutate(
+    # assessed=unique_pt_id %in% clusters_lt_6$unique_pt_id,
+    n= ifelse(is.na(n),0,n),
+    assessed= n>0,
+    symbol= case_when(
+      assessed==F~ "grey",
+      n==6 ~ "green",
+      TRUE~ "red"),
+    legend_text= case_when(
+      symbol=="grey"~"not assessed",
+      symbol== "green" ~ "cluster complete",
+      symbol=="red" ~ "cluster size not 6"
+    )
+    # assessed_partial= assessed & !is.na(n) & n==6
+    ) %>% 
+  left_join(df_host_enums_by_clust) %>% 
+  mutate(popup_text=paste0('<strong>','Point ID: ', unique_pt_id, '</strong>',
+                           '<br/', '<strong>', 'Number pts:','</strong>', n,
+                           '<br/>', '<strong>','Enumerators: ' ,' </strong>', '<br/>',
+                           enums_html,'' ) %>%
+  lapply(htmltools::HTML))
+
+
+outputs$cluster_size_table<- ss_host %>% 
+  st_drop_geometry() %>% 
+  select(unique_pt_id, n, enums) %>%
+  filter(n>0 & n!=6)
+outputs$cluster_size_map <-ss_host %>%
+  leaflet() %>% 
+  addTiles() %>% 
+  addCircles(color = ~symbol, 
+             label = ~popup_text) %>% 
+  addLegend(colors=c("green","red", "grey"), 
+            labels= c('cluster size = 6', 'cluster size != 6', 'unassessed'))
+  
+    
+outputs$cluster_not_assessed<- ss_host %>% 
+  st_drop_geometry() %>% 
+  select(unique_pt_id, n, enums) %>%
+  filter(n==0)
+```
+
+There are **`r outputs$cluster_size_table %>% nrow`** clusters that have been assessed that do not have the required cluster size of 6 interviews. The table below shows the problematic clusters and enumerators who performed the surveys in the clusters. You can scroll down in the table with the arrows in the top right. 
+
+```{r}
+outputs$cluster_size_table %>% dt_set_options()
+```
+
+Spatial representation of the cluster size issue
+```{r, out.width= '100%'}
+outputs$cluster_size_map
+```
+
+Additionally there are **`r nrow(outputs$cluster_not_assessed)`** clusters that have not been assesseed
+
+```{r}
+outputs$cluster_not_assessed %>% dt_set_options()
+```
+### Duplicated Spatial IDs (refugee)
+```{r}
+df_ref<-df_ref %>% 
+  group_by(unique_pt_id) %>% 
+  mutate(
+    dup_pt_id= n()>1
+  ) %>% 
+  ungroup()
+
+
+cl_outputs$ref_duplicated_pt_id<- df_ref %>%
+  filter(dup_pt_id==T) %>%
+  mutate(
+    name= "unique_pt_id",
+    type= "remove_survey",
+    current_value= unique_pt_id,
+    value= NA,
+    issue= "duplicated pt id - one needs to be removed",
+    issue_id= "dup_pt_id"
+  ) %>% 
+  select(all_of(cl_params)) 
+  
+
+```
+
+As individual HH level spatial samples were drawn for the refugee target HHs each refugee interview should have its own unique spatial ID. However, there are **`r df_ref %>% filter(dup_pt_id) %>% nrow()`** refugee interviews that have duplicated spatial id. The duplicated points are provided in the table and a spatial visualization of duplicated refugee points is provided below that
+
+```{r}
+cl_outputs$ref_duplicated_pt_id %>% dt_set_options()  
+
+
+df_ref_dups<- df_ref %>%
+  filter(dup_pt_id==T) %>% 
+  group_by(unique_pt_id) %>% 
+  mutate(enums_html= paste0(enumerator,collapse = "</br>")) %>% 
+  ungroup()
+
+refugee_target_pts_dup<- ss %>% 
+  filter(unique_pt_id %in%  df_ref_dups$unique_pt_id)
+
+
+
+df_ref_dups_spatial<-df_ref_dups %>%
+  filter(dup_pt_id==T) %>% 
+  mutate(popup_text=paste0('<strong>','Point ID: ', unique_pt_id, '</strong>',
+                           '<br/>', '<strong>','Enumerators: ' ,' </strong>', '<br/>',
+                           enums_html,'' ) %>%
+  lapply(htmltools::HTML)) %>% 
+  st_as_sf(
+    crs=4326, coords= c("lon","lat")
+  ) 
+
+if(nrow(df_ref_dups_spatial)>0){
+outputs$ref_map_dup_pts<-leaflet() %>% 
+  addTiles() %>% 
+  addCircles(data= df_ref_dups_spatial,color = "blue",label = ~popup_text) %>% 
+  addCircles(data= refugee_target_pts_dup, color="red",label=~unique_pt_id) %>% 
+  addLegend(colors = c("blue","red"),labels = c("inteview location","sample point location"))
+}
+```
+
+```{r, out.width="100%"}
+outputs$ref_table_duplicated_sp_id
+outputs$ref_map_dup_pts
+
+```
+
+## Spatial Verification 
+
+## Refugee
+```{r}
+
+cl_outputs$pt_id_not_in_sample<-df %>% 
+  filter(!unique_pt_id %in% ss$unique_pt_id) %>% 
+  mutate(
+    type="change_response",
+    name= unique_pt_id,
+    current_value= unique_pt_id,
+    value= NA,
+    issue= "pt id does not exist in sample",
+    issue_id= "pt_id_not_in_sample"
+         ) %>% 
+  select(cl_params
+         )
+
+
+df_ref_spatial<- df_ref %>% 
+  filter(unique_pt_id %in% ss$unique_pt_id) %>% 
+  st_as_sf(coords=c("lon","lat"), crs=4326)
+
+# debugonce(cd)
+df_ref_distances<-cd(sf1 = df_ref_spatial,
+                                   sf2 = ss_ref,
+                                   sf1_id = "unique_pt_id", 
+                                   sf2_id = "unique_pt_id", 
+                                   dist_threshold = 150)
+
+# df_ref_distances$dataset %>% 
+#   group_by(unique_pt_id) %>% 
+#   mutate(dup=n()>1) %>% 
+#   filter(dup==T)
+
+cl_outputs$ref_pts_gte150m<- df_ref_distances$dataset%>% 
+  st_drop_geometry() %>% 
+  filter(dist_m>150) %>%
+  left_join(df_ref %>% select(-unique_pt_id), by=c("uuid")) %>% 
+  mutate(
+    name="unique_pt_id",
+    current_value= unique_pt_id,
+    value=glue("{round(dist_m,0)} m from target"),
+    type="remove_survey",
+    issue= "pt is >150 m from target sample point",
+    issue_id= "pt_dist_check"
+    
+  ) %>% 
+  select(cl_params)
+
+cl_outputs$ref_pts_gte150m %>% dt_set_options()
+```
+
+
+## Logic checks on questions
+
+1. It is possible for a household to have to borrow money incidentally for a particular expense (e.g. healthcare) but overall its average income is sufficient. However, this should be an exception so we would like enumerators to confirm that or otherwise change response to "no"
+
+2. The question animal_sustain_hh is: "Over the past six months, were you able to generate sufficient food and/or income through animal husbandry to meet the needs of your entire households?" 
+
+Therefore, if a household response to animal_sustain_hh is option 1 "yes_through_animals" they should not report
+additional livelihood activities and coping mechanisms, including agriculture. However, in almost
+all cases where they respond yes_through_animals the HH does rely on alternatives as well. That is a contradiction, and the response should be changed to either "no_through_other_sources" or "no_meeting_hh_needs" depending on whether the HH was able to meet needs or not. 
+
+```{r}
+coping_lending<- c("coping_strategy/begging")#,
+               #"coping_strategy/borrow",
+               #"coping_strategy/credit_bank")
+
+additional_livelihood_agric<- c("additional_livelihood/farming_own_land",
+                     "additional_livelihood/cash_crop_own_land", 
+                     "additional_livelihood/subsistance_hired_land",
+                     "additional_livelihood/cash_crop_hired_land", 
+                     "additional_livelihood/paid_agric_labor",
+                     "additional_livelihood/livestock")
+
+
+
+rf<-df %>% 
+  rowwise()
+# df<-
+df<-  rf %>% 
+  # rowwise() %>%
+  mutate(
+    coping_beg_borrow= sum(c_across(coping_lending),na.rm=T),
+    additional_ag_livelihood= sum(c_across(additional_livelihood_agric),na.rm=T)
+  ) %>% 
+  ungroup() %>% 
+  mutate(sufficient_money_and_coping= coping_beg_borrow>0 & monthly_y_sufficient=="yes",
+         animal_sustain_and_addit_ag_livelihood= additional_ag_livelihood>0 &
+           animal_sustain_hh== "yes_through_animals" ,
+         has_skills_lacks_skills= `sector_appeal/has_necessary_skills`&
+           `chall_find_job/lack_skills`
+        
+         )
+# df %>% 
+#   filter(has_skills_lacks_skills==T) %>% 
+#   select(uuid,`sector_appeal/has_necessary_skills`,`chall_find_job/lack_skills`) %>% 
+#   nrow()
+
+cl_outputs$cl_logical_checks<- df %>% 
+  filter(sufficient_money_and_coping) %>% 
+  mutate(type= "change_response",
+         current_value= "yes",
+         name = "monthly_y_sufficient",
+         value = "no",
+         issue= "HH is coping for $, but reporting sufficient $",
+         issue_id= "coping_logic1") %>% 
+  bind_rows(
+    df %>% 
+  filter(animal_sustain_and_addit_ag_livelihood) %>% 
+    mutate(
+      type= "change_response",
+      current_value= "yes_through_animals",
+      name = "animal_sustain_hh",
+      value = "no_through_other_sources",
+      issue= "report meeting needs only through animals, but report agriculture as secondary income",
+      issue_id= "livelihood_logic1"
+  )
+  ) %>%
+  select(cl_params)
+
+```
+
+
+```{r}
+cl_outputs$cl_logical_checks %>% dt_set_options()
+
+```
+
+
+```{r,eval= T}
+# debugonce(check_others)
+other_cleaning_log<-check_others(df = df,
+                                 suffix = "_other",
+                                 report_cols = cl_params[cl_params!="issue_id"],
+                                 kobo_survey_sheet = ks)
+
+
+cl_outputs$other_cleaning_log<- other_cleaning_log %>%
+  mutate(
+    issue_id= "other_checks"
+  ) %>% 
+  select(cl_params, other_text)  
+
+
+cl_outputs2<-map(cl_outputs,function(x)x %>% 
+      group_by(issue_id) %>% 
+      mutate(
+        issue_uuid=paste0(row_number(),"_",issue_id),
+        uuid_cl = paste0(uuid,"_",type,"_",name),
+        value= as.character(value)
+        )
+      )
+
+# auto_log<- other_cleaning_log %>%
+#   bind_rows(outputs$cl_logical_checks)# %>%
+auto_log<- bind_rows(cl_outputs2)  
+auto_log %>% 
+  dt_set_options()
+auto_log %>% 
+  count(issue_id) %>% 
+  dt_set_options()
+```
+
+```{r}
+# combine with manual log edited by dave
+al_updated<-auto_log %>% 
+  left_join(
+    el %>% select(value_d, uuid_cl:orig_index),
+    by="uuid_cl"
+  )
+
+
+if(!cleaned & write_output ){
+  new_cl_name<- paste0("inputs/auto_cl/",butteR::date_file_prefix(),"_auto_cl.csv")
+  write_csv(al_updated, new_cl_name,na="")
+}
+if(cleaned & write_output){
+  new_cl_name<- paste0("inputs/auto_cl/",butteR::date_file_prefix(),"_auto_cl_after_clean1.csv")
+  write_csv(al_updated, new_cl_name,na="")
+}
+al_updated %>% View()
+```
+
+
+
+```{r,eval=F}
+auto_log %>% tabyl(issue_id)
+pv<- read_csv("inputs/cl/20210225_auto_cl_DvZ_15-20, 24.csv")
+   
+pv %>% 
+  mutate(
+    issue_id= case_when(
+      str_detect(issue,"^duplicated")~"dup_pt_id",
+      str_detect(issue, "^HH is") ~ "coping_logic1",
+      str_detect(issue, "^other_reg") ~ "other_checks",
+      str_detect(issue, "^pt id") ~ "pt_id_not_in_sample",
+      str_detect(issue, "^pt is") ~ "pt_dist_check",
+      str_detect(issue, "^report meeting") ~ "livelihood_logic1",
+      TRUE~"blabla"
+    )
+  ) %>% tabyl(issue_id)
+  
+
+
+
+prev_day_auto_cl_file<- paste0("inputs/auto_cl/",butteR::date_file_prefix(-1),"_auto_cl.csv")
+
+# if(file.exists(prev_day_auto_cl_file)){
+#   auto_log_prev<- read_csv(prev_day_auto_cl_file, col_types=cols())
+#   auto_log_prev$start_date
+#   auto_logb<- auto_log %>% 
+#     left_join(auto_log_prev) #%>% 
+#     mutate(first_gen= ifelse(is.na(first_gen),Sys.Date(),first_gen))
+# }
+
+#someting going wron with geopoints
+auto_log %>%
+  janitor::tabyl(issue)
+auto_log<- auto_log %>% 
+  mutate(
+    issue_id= case_when(
+      str_detect(issue,"^duplicated")~"dup_pt_it",
+      str_detect(issue, "^HH is") ~ "lg_coping",
+      str_detect(issue, "^other_reg") ~ "other_regrouped",
+      str_detect(issue, "^pt id") ~ "pt_id_not_in_samp",
+      str_detect(issue, "^pt is") ~ "gis_dist",
+      str_detect(issue, "^report meeting") ~ "lg_livelihood1",
+      TRUE~"blabla"
+      
+    )
+  )
+
+auto_log %>% tabyl(issue_id)
+auto_log %>% tabyl(issue)
+pv %>% janitor::tabyl(issue)
+
+
+
+auto_log<- auto_log %>% 
+  ungroup() %>% 
+  mutate(
+    first_gen= Sys.Date()
+         ) %>% 
+  arrange(first_gen,start_date, uuid,name) %>%
+    ungroup() %>% 
+    mutate(index= 1:nrow(.)) %>% 
+  select(index, everything())
+
+# debugonce(butteR::df_comparison_log)
+# butteR::df_comparison_log(raw_data = auto_log %>% select(-first_gen),
+#                           clean_data = pv %>%
+#                             select(-first_gen,-`Comment DvZ`),
+#                           raw_data_uuid = "index", clean_data_uuid ="index")
+
+new_cl_name<- paste0("inputs/auto_cl/",butteR::date_file_prefix(),"_auto_cl.csv")
+# write_csv(auto_log, new_cl_name,na="")
+
+```
+
+
+```{r, eval=F}
+#kobld needs uuid like _uuid
+auto_log<- read_csv(prev_day_auto_cl_file)
+auto_log<- auto_log %>% 
+  rename(`_uuid`="uuid")
+# kb<- kobold::kobold(survey = ks,choices = kc,data = df,cleaning = auto_log)
+# kb2<- kobold::kobold_cleaner(object = kb)
+
+
+
+# others_analytics<-df %>% butteR::check_others(report_cols = report_params) 
+# others_analytics$log$name
+# others_analytics$log %>% 
+#   left_join(others_analytics$table) %>% 
+#   select(any_of(cl_params), current_value="other_col") %>% 
+#   mutate(issue= "other regrouped")
+
+``` 
+
+There are `r nrow(cl_outputs$other_cleaning_log %>%filter(type!="remove_option"))` free text other responses to be dealt with. There are  **`r nrow(auto_log)-nrow(cl_outputs$other_cleaning_log %>%filter(type!="remove_option"))`** additional checks that need to be reviewed and completed in the auto log which has been generated
+
+```{r,eval=F}
+
+kobold:::get_choices()
+  
+kobold:::get_choices(q_name = other_cleaning_log$value ,)
+
+df$main_livelihood %>% table()
+farming_own_land
+
+rep_params<- c('uuid', "enumerator")
+df %>% 
+  filter(main_livelihood=="farming_own_land", crop_growing=="no") %>% 
+  select(all_of(report_params)) %>% 
+  pivot
+
+```
+
+
+
+```
