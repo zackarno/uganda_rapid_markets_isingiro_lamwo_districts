@@ -8,7 +8,12 @@
 !/outputs/graphs/
 /outputs/graphs/*
 !outputs/graphs/.gitkeep
+
 /R/*
-!/R/cleaning_and_prelim_analysis/*
+!/R/cleaning_and_prelim_analysis/
+!R/ongoing/*
+/R/extras*
+
+
 /scrap/*
 *.html
