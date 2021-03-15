@@ -15,8 +15,14 @@ mutate_batch<- function(df,nm, value=NA){
   
 }
 
+# since i removed the enumerator column from the dataset i should not clean that column
+cleaning_log<-cleaning_log %>%
+  filter(name!="enumerator")
+
+
+# These are all new choices that we want to add as options in the data set
 new_vars<-tibble::tribble(
-  ~vars,              ~choice, 
+  ~name,              ~choice, 
   "agric_y_not",                  "no_land",
   "support_agric_land",   "facilitate_access_land",
   "support_agric_land", "facilitate_access_market",
@@ -39,63 +45,37 @@ new_vars<-tibble::tribble(
   "reason_less_y",               "high_costs",
   "sector_pref", "bee_keeping"
 )
+# make sure there are no duplicates
+new_vars<- distinct(new_vars) %>% arrange(name)
 
-new_vars<- distinct(new_vars) %>% arrange(vars)
-# look up table
-name_list_name<-ks %>% 
-  mutate(
-    list_name= str_replace_all(string = type, pattern = "select_one|select one|select_multiple|select multiple","") %>% 
-      trimws()
-  ) %>% select(list_name, name)
+# create kobold object
+kbo<- kobold::kobold(survey = ks,
+                     choices = kc,
+                     data = raw_data,
+                     cleaning = cleaning_log)
 
 
+# made function to add choices to xlsform tool 
+kc_modified<-butteR:::xlsform_add_choices(kobold =kbo,new_choices =  new_vars)
 
-new_vars$vars[new_vars$vars%in%name_list_name$name]
-kc %>% 
-  left_join(name_list_name, by="list_name")
-new_vars_lu<-new_vars %>% 
-  left_join(name_list_name, by = c("vars"="name"))
-
-new_vars_split<- new_vars_lu %>%
-  select(list_name,name=choice) %>% 
-  mutate(label=name) %>% 
-  split(.$list_name)
-
-kcl<-kc %>% 
-  split(.$list_name)
-kcl_mod<- kcl %>% 
-  keep(names(.) %in% new_vars_lu$list_name)
-
-kc_new_list<-list()
-for(i in names(kcl_mod)){
-  kc_temp<-kcl[i]
-  nv_temp<- new_vars_split[i]
-  kc_new_list[i]<-bind_rows(kc_temp,nv_temp)
-}
-kcl[names(kc_new_list)]<-kc_new_list
-kobo_choices_modified<- bind_rows(kcl)
-
-kobo_choices_modified %>% 
-  filter(list_name=="livestock_type_list")
-
-new_vars_lu<- new_vars_lu %>% 
+# if the new variables are select multiple we need to add those columns to the data set itself
+new_vars_lu<- new_vars %>% 
   left_join(ks %>% 
               mutate(
                 q_type= ifelse(str_detect(type,"select_one|select one"),"so","sm")
               ) %>% 
-              select(name,q_type), by= c("vars"="name")
+              select(name,q_type), by= c("name"="name")
   )
 new_vars_lu_sm <-new_vars_lu %>% 
   filter(q_type=="sm") %>% 
-  mutate(new_cols=paste0(vars,"/",choice))
+  mutate(new_cols=paste0(name,"/",choice))
 
+# make them default to FALSE, the kobold cleaner will impute relevant skip logic, and 
+# when options are added in the cleaning log they will switch from F->T
 df_modified<-raw_data %>% 
-  mutate_batch(nm=new_vars_lu_sm$new_cols,value = F)
+  butteR:::mutate_batch(nm=new_vars_lu_sm$new_cols,value = F)
 
-
-
-
-# hopefully status_loc wont cause any issues
+# just need to add this column to create a unique pt id 
 df_modified<- df_modified %>% 
   mutate(
     status_loc=ifelse(status=="refugee_settlement", paste0(refugee_settle_name,"_refugee"),
@@ -105,20 +85,16 @@ df_modified<- df_modified %>%
     
   )
 
-
+# remake kobold object with new choices sheet, data set, and cleaning log
 kbo<- kobold::kobold(survey = ks %>%
                        filter(name %in% colnames(df_modified)),
-                     choices = kobo_choices_modified,
+                     choices = kc_modified,
                      data = df_modified,
                      cleaning = cleaning_log)
 kbo_cleaned<- kobold::kobold_cleaner(kbo)
 
 
-
-kbo_cleaned$data<- kbo_cleaned$data %>% select(-contains("geopoint"))
-kbo_cleaned$data %>% select(starts_with("chall_find_job")) %>% View()
-
+#write out clean data set
 write_csv(kbo_cleaned$data,file = paste0("outputs/", butteR::date_file_prefix(), "_clean_data.csv"))
-
 
 
