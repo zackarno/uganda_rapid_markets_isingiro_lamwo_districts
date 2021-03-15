@@ -8,12 +8,6 @@ cleaning_log<-read_csv("inputs/auto_cl/20210315_cleaning_log_DvZ.csv")
 raw_data<- read_csv("inputs/raw_data/final_raw_data_from_kobo_server.csv")
 ks<- readxl::read_xlsx(path = "inputs/tool/rapid_markets_tool.xlsx",sheet = "survey")
 kc<- readxl::read_xlsx(path = "inputs/tool/rapid_markets_tool.xlsx",sheet = "choices")
-# copied these new options with data pasta from a googlesheet
-mutate_batch<- function(df,nm, value=NA){
-  df %>% 
-    tibble::add_column(!!!set_names(as.list(rep(value, length(nm))),nm=nm))
-  
-}
 
 # since i removed the enumerator column from the dataset i should not clean that column
 cleaning_log<-cleaning_log %>%
