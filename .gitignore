@@ -3,7 +3,10 @@
 .RData
 .Ruserdata
 /inputs/*
-!/inputs/tool
 /outputs/*
+/outputs/graphs*
+!/outputs/graphs/*.gitkeep
 /R/*
 !/R/cleaning_and_prelim_analysis/*
+/scrap/*
+*.html
