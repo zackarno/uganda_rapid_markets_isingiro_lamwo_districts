@@ -1,0 +1,9 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+/inputs/*
+!/inputs/tool
+/outputs/*
+/R/*
+!/R/cleaning_and_prelim_analysis/*
