@@ -14,7 +14,8 @@ dap<- dap %>% janitor::clean_names()
 
 
 # run from here to the bottom of the script. It takes 21 minutes on my computer so go have coffee
-# and enjoy the fact that your computer is calculating >28k means/pct means
+# its calculating > 28k point estimates.
+
 start<- Sys.time() 
 # load in hh-level population data sets
 host_pop<- read_csv("inputs/20210224_host_pop_cleaned.csv")
