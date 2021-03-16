@@ -139,12 +139,6 @@ dap_refugee_subset1<-dap %>%
 outputs<-list()
 # refugee -----------------------------------------------------------------
 
-# debugonce(butteR::survey_collapse_binary_long)
-# butteR::survey_collapse_binary_long(df = refsvy,x = "i.minors_working", "district_name")
-# butteR::survey_collapse_categorical_long(df = refsvy,x = "i.minors_working", "district_name")
-# butteR::survey_collapse(df = refsvy,vars_to_analyze = "i.minors_working",disag = "district_name")
-# by district, no additional subset
-# debugonce(butteR::survey_collapse)
 outputs$ref_dist<-
   butteR::survey_collapse(df = refsvy,
                           vars_to_analyze = refugee_variables_no_subsets, 
@@ -193,18 +187,8 @@ for(i in seq_along(dap_refugee_subset_split)){ #seq_along(dap_single_subset_spli
 }
 outputs$ref_district_subset1<- bind_rows(ref_district_subset1) %>% 
   mutate(population= "refugee")
-# outputs$ref_district_subset1 %>% print(n=150)
 
-# butteR::survey_collapse_binary_long(df = refsvy, x = "i.minors_working",disag="district_name")
 # host --------------------------------------------------------------------
-# 
-# refsvy %>% 
-#   group_by(district_name ) %>%
-#   summarise(
-#     # survey_mean(`additional_livelihood/farming_own_land` ,na.rm=T),
-#             # n_unweight= survey_count(`additional_livelihood/farming_own_land`,na.rm=T),
-#             n_unweight= survey_tally(x = !!sym("additional_livelihood/farming_own_land"))
-#             )
 
 dap_host<-dap %>% 
   filter( split %in%  c("All"), !is.na(subset_1))
