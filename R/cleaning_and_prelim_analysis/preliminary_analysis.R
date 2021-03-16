@@ -317,6 +317,8 @@ full_analysis_long %>%
 
 # plots -------------------------------------------------------------------
 
+# RUN THIS TO THE BOTTOM THEN GO CHECKOUT THE OUTPUTS/GRAPH FOLDER... .
+# THESE GRAPHS ARE USEFULTO UNDERSTAND THE ASSESSMENT RESULTS.
 analysis_groups<-c('refugee','host', 'combined')
 district_level_plots<-list()
 
